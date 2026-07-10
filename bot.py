@@ -48,7 +48,7 @@ conversations = {}
 async def ask_ai(messages: list) -> str:
     try:
         response = ai_client.chat.completions.create(
-            model="llama-3.1-70b-versatile",
+            model="mixtral-8x7b-32768",
             messages=messages,
             temperature=0.7,
             max_tokens=2000
@@ -56,7 +56,7 @@ async def ask_ai(messages: list) -> str:
         return response.choices[0].message.content
     except Exception as e:
         logging.error(f"AI error: {e}")
-        return "Извините, произошла ошибка при обращении к ИИ. Попробуйте позже."
+        return f"Извините, ошибка ИИ: {e}"
 
 # --- Генератор ссылки на Яндекс.Маркет ---
 def get_market_url(text: str) -> str:

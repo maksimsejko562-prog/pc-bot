@@ -1,4 +1,9 @@
-import os, re, logging, asyncio, hashlib, json, time
+import os
+import re
+import logging
+import asyncio
+import hashlib
+import json
 from datetime import datetime, timedelta
 from collections import defaultdict
 from aiogram import Bot, Dispatcher, types, F
@@ -16,28 +21,19 @@ load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
-ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")          # твой Telegram ID для алертов
-CHANNEL_ID = os.getenv("CHANNEL_ID")                # ID или @username канала для автопостинга
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
+CHANNEL_ID = os.getenv("CHANNEL_ID")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Клиент DeepSeek
 client = OpenAI(
     api_key=DEEPSEEK_API_KEY,
     base_url="https://api.deepseek.com"
 )
 
-# ========== Глобальные хранилища ==========
-# Кэш ответов DeepSeek (для одинаковых запросов)
-cache = {}  # ключ: хэш (промпт + сообщение), значение: ответ
-# История диалогов (ограничим 5 сборками на пользователя)
-history = defaultdict(list)  # user_id -> [{"role","content"}, ...]
-# Рейтинг сборок: id сборки (из ответа бота) -> {"likes":0, "dislikes":0, "text":...}
-build_ratings = {}
-# Пользовательские сессии для /quiz
-quiz_sessions = {}
-
-# ========== Усиленный системный промпт с новыми правилами ==========
+# ========== Системный промпт ==========
 SYSTEM_PROMPT = {
     "role": "system",
     "content": (
@@ -55,21 +51,21 @@ SYSTEM_PROMPT = {
     )
 }
 
-# ========== Инициализация бота ==========
-bot = Bot(token=TELEGRAM_TOKEN)
-dp = Dispatcher()
+# ========== Глобальные хранилища ==========
+cache = {}
+history = defaultdict(list)
+build_ratings = {}
+quiz_sessions = {}
+user_last_request = {}
 
 # ========== Вспомогательные функции ==========
 def rate_limit(user_id: int) -> bool:
-    """Ограничение 1 запрос в 6 секунд (10 в минуту)."""
     now = datetime.now()
     last = user_last_request.get(user_id)
     if last and (now - last) < timedelta(seconds=6):
         return False
     user_last_request[user_id] = now
     return True
-
-user_last_request = {}
 
 def extract_key_components(text: str) -> str:
     gpu = re.search(r'(RTX\s?\d{4}\s?(Super|Ti)?|RX\s?\d{4,5}\s?(XT|GRE)?|GeForce\s?\w+\s?\d{4})', text, re.I)
@@ -83,7 +79,6 @@ def get_market_url(components: str) -> str:
     return f"https://market.yandex.ru/search?text={components.replace(' ', '+')}"
 
 def get_cache_key(messages: list) -> str:
-    """Хэш от склеенных сообщений для кэширования."""
     raw = json.dumps([m['content'] for m in messages], ensure_ascii=False)
     return hashlib.md5(raw.encode()).hexdigest()
 
@@ -104,7 +99,6 @@ async def ask_ai(messages: list) -> str:
         return answer
     except Exception as e:
         logger.error(f"DeepSeek error: {e}")
-        # Алерт админу
         if ADMIN_CHAT_ID:
             try:
                 await bot.send_message(ADMIN_CHAT_ID, f"🚨 Ошибка DeepSeek: {e}")
@@ -112,22 +106,11 @@ async def ask_ai(messages: list) -> str:
                 pass
         return "Извините, произошла ошибка при обращении к ИИ. Попробуйте позже."
 
-async def send_long_message(chat_id: int, text: str, keyboard=None):
-    """Разбивает длинное сообщение на части."""
-    if len(text) <= 4096:
-        return await bot.send_message(chat_id, text, reply_markup=keyboard)
-    parts = []
-    while len(text) > 4096:
-        split_idx = text.rfind('\n', 0, 4096)
-        if split_idx == -1:
-            split_idx = 4096
-        parts.append(text[:split_idx])
-        text = text[split_idx:].lstrip()
-    parts.append(text)
-    for part in parts:
-        await bot.send_message(chat_id, part, reply_markup=keyboard if part == parts[-1] else None)
+# ========== Инициализация бота ==========
+bot = Bot(token=TELEGRAM_TOKEN)
+dp = Dispatcher()
 
-# ========== Обработчики команд ==========
+# ========== Команды ==========
 @dp.message(Command("start"))
 async def start_cmd(message: Message):
     user_id = message.from_user.id
@@ -152,7 +135,6 @@ async def budget_cmd(message: Message, command: CommandObject):
         await message.answer("Некорректная сумма. Введите число.")
         return
     user_text = f"Собери ПК с бюджетом {amount} рублей. Учти все задачи (по умолчанию игровой, Full HD)."
-    # Перенаправляем в общий обработчик
     message.text = user_text
     await handle_message(message)
 
@@ -195,13 +177,12 @@ async def top_builds(message: Message):
         text += f"{i}. {short}...\n👍{likes} 👎{dislikes}\n\n"
     await message.answer(text)
 
-# ========== Обработка текстовых сообщений ==========
+# ========== Обработка текста ==========
 @dp.message(F.text)
 async def handle_message(message: Message):
     user_id = message.from_user.id
     user_text = message.text
 
-    # Проверка на активную сессию квиза
     if user_id in quiz_sessions:
         await quiz_step(message)
         return
@@ -210,45 +191,32 @@ async def handle_message(message: Message):
         await message.answer("⏳ Слишком много запросов. Подождите немного.")
         return
 
-    # Инициализация истории
     if user_id not in history:
         history[user_id] = [SYSTEM_PROMPT]
-    # Ограничиваем историю 10 последними сообщениями
     if len(history[user_id]) > 10:
         history[user_id] = [SYSTEM_PROMPT] + history[user_id][-9:]
 
     history[user_id].append({"role": "user", "content": user_text})
-
     await bot.send_chat_action(message.chat.id, "typing")
-
     answer = await ask_ai(history[user_id])
     history[user_id].append({"role": "assistant", "content": answer})
 
-    # Сохраняем сборку в рейтинг (если это была сборка)
-    if "бюджет" in user_text.lower() or "конфигурация" in user_text.lower() or "сборк" in user_text.lower():
-        build_id = str(message.message_id)  # временный ID
-        build_ratings[build_id] = {"likes": 0, "dislikes": 0, "text": answer}
+    if any(w in user_text.lower() for w in ["бюджет", "конфигурация", "сборк"]):
+        build_ratings[str(message.message_id)] = {"likes": 0, "dislikes": 0, "text": answer}
 
-    # Инлайн-клавиатура
     components = extract_key_components(answer)
     market_url = get_market_url(components)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="🔄 Альтернатива", callback_data=f"alt_{user_id}"),
-            InlineKeyboardButton(text="💰 Где купить", url=market_url)
-        ],
-        [
-            InlineKeyboardButton(text="📊 Бенчмарки", url="https://www.cpubenchmark.net/"),
-            InlineKeyboardButton(text="👍 Лайк", callback_data=f"like_{message.message_id}"),
-            InlineKeyboardButton(text="👎 Дизлайк", callback_data=f"dislike_{message.message_id}")
-        ],
-        [
-            InlineKeyboardButton(text="🔔 Отслеживать цену", callback_data=f"track_{components}")
-        ]
+        [InlineKeyboardButton(text="🔄 Альтернатива", callback_data=f"alt_{user_id}"),
+         InlineKeyboardButton(text="💰 Где купить", url=market_url)],
+        [InlineKeyboardButton(text="📊 Бенчмарки", url="https://www.cpubenchmark.net/"),
+         InlineKeyboardButton(text="👍 Лайк", callback_data=f"like_{message.message_id}"),
+         InlineKeyboardButton(text="👎 Дизлайк", callback_data=f"dislike_{message.message_id}")],
+        [InlineKeyboardButton(text="🔔 Отслеживать цену", callback_data=f"track_{components}")]
     ])
-    await send_long_message(message.chat.id, answer, keyboard)
+    await message.answer(answer, reply_markup=keyboard)
 
-# ========== Квиз (персональные рекомендации) ==========
+# ========== Квиз ==========
 async def quiz_step(message: Message):
     user_id = message.from_user.id
     session = quiz_sessions[user_id]
@@ -275,7 +243,6 @@ async def quiz_step(message: Message):
 
     elif step == 4:
         session["shop"] = message.text.strip()
-        # Формируем итоговый запрос
         budget = session["budget"]
         tasks = session["tasks"]
         periphery = "нужна периферия" if session["periphery"] else "только системный блок"
@@ -283,22 +250,18 @@ async def quiz_step(message: Message):
         prompt = (f"Подбери конфигурацию ПК: бюджет {budget}₽, задачи {tasks}, "
                   f"{periphery}, предпочтительный магазин {shop}.")
         await message.answer(f"Отлично! Собираю для вас конфигурацию:\n{prompt}")
-        # Удаляем сессию
         del quiz_sessions[user_id]
-        # Отправляем как обычный запрос
         message.text = prompt
         await handle_message(message)
 
-# ========== Обработка инлайн-кнопок ==========
+# ========== Callback-обработчики ==========
 @dp.callback_query(F.data.startswith("alt_"))
 async def alt_build(call: CallbackQuery):
     user_id = int(call.data.split("_")[1])
-    # Запрашиваем у ИИ альтернативную сборку
     prompt = "Предложи альтернативную конфигурацию для предыдущей сборки с учётом того же бюджета и задач."
     history[user_id].append({"role": "user", "content": prompt})
     answer = await ask_ai(history[user_id])
     history[user_id].append({"role": "assistant", "content": answer})
-    # Редактируем исходное сообщение с новым текстом (или отправляем новое)
     await call.message.edit_text(answer, reply_markup=call.message.reply_markup)
     await call.answer()
 
@@ -319,10 +282,9 @@ async def dislike_build(call: CallbackQuery):
 @dp.callback_query(F.data.startswith("track_"))
 async def track_price(call: CallbackQuery):
     components = call.data[len("track_"):]
-    await call.answer("🔔 Функция отслеживания цены пока в разработке. Но вот ссылка на Яндекс.Маркет:\n"
-                      + get_market_url(components), show_alert=True)
+    await call.answer("🔔 Функция отслеживания цены пока в разработке.", show_alert=True)
 
-# ========== Админ-команды ==========
+# ========== Админ-команда /post ==========
 @dp.message(Command("post"))
 async def post_to_channel(message: Message):
     if str(message.from_user.id) != ADMIN_CHAT_ID:

@@ -11,27 +11,23 @@ from dotenv import load_dotenv
 load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 
 logging.basicConfig(level=logging.INFO)
 
-# Клиент Groq (бесплатный ИИ)
-ai_client = OpenAI(
-    api_key=GROQ_API_KEY,
-    base_url="https://api.groq.com/openai/v1"
+# Клиент DeepSeek (совместим с OpenAI API)
+client = OpenAI(
+    api_key=DEEPSEEK_API_KEY,
+    base_url="https://api.deepseek.com"
 )
 
-# Системный промпт – характер бота, стиль "как у меня"
 SYSTEM_PROMPT = {
     "role": "system",
     "content": (
         "Ты — опытный консультант по сборке и оптимизации ПК. "
-        "Твоя задача: помогать пользователям собирать ПК, оценивать готовые конфигурации, "
-        "находить плюсы/минусы и давать рекомендации. "
         "Отвечай на русском, дружелюбно, понятно даже новичкам. "
         "Если просят сборку — уточни бюджет и цели. "
-        "Анализируй совместимость, баланс производительности, указывай конкретные модели. "
-        "При разборе конфигурации обязательно выделяй плюсы и минусы, предлагай альтернативы с пояснениями."
+        "Анализируй совместимость, баланс, плюсы и минусы, предлагай альтернативы."
     )
 }
 
@@ -41,18 +37,15 @@ conversations = {}
 
 async def ask_ai(messages: list) -> str:
     try:
-        response = ai_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",  # рабочая бесплатная модель
-            # Если эта модель перестанет работать, замени на одну из:
-            # "llama-3.3-70b-versatile"
-            # "llama3-70b-8192"
+        response = client.chat.completions.create(
+            model="deepseek-chat",  # модель DeepSeek
             messages=messages,
             temperature=0.7,
             max_tokens=2000
         )
         return response.choices[0].message.content
     except Exception as e:
-        logging.error(f"AI error: {e}")
+        logging.error(f"DeepSeek error: {e}")
         return "Извините, произошла ошибка при обращении к ИИ. Попробуйте позже."
 
 def get_market_url(text: str) -> str:
@@ -81,7 +74,6 @@ async def handle_message(message: types.Message):
 
     conversations[user_id].append({"role": "user", "content": user_text})
 
-    # Индикатор "печатает" (можем оставить, обычно работает)
     try:
         await bot.send_chat_action(message.chat.id, "typing")
     except:

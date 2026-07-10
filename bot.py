@@ -93,7 +93,7 @@ async def handle_message(message: types.Message):
     await bot.send_chat_action(message.chat.id, "typing")
 
     # Запрос к ИИ
-    ai_answer = await ask_ai(conversations[user_id])
+    ai_answer = "Тестовый ответ. Бот работает!"
 
     # Сохраняем ответ ассистента
     conversations[user_id].append({"role": "assistant", "content": ai_answer})

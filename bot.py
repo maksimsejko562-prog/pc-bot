@@ -39,7 +39,7 @@ conversations = {}
 async def ask_ai(messages):
     try:
         response = ai_client.chat.completions.create(
-            model="mixtral-8x7b-32768",
+            model="llama-3.1-70b-versatile",
             messages=messages,
             temperature=0.7,
             max_tokens=2000

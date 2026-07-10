@@ -56,7 +56,7 @@ async def ask_ai(messages: list) -> str:
         return response.choices[0].message.content
     except Exception as e:
         logging.error(f"AI error: {e}")
-        return f"Извините, ошибка ИИ: {e}"
+        return f"Ошибка ИИ: {e}"
 
 # --- Генератор ссылки на Яндекс.Маркет ---
 def get_market_url(text: str) -> str:
@@ -93,7 +93,7 @@ async def handle_message(message: types.Message):
     await bot.send_chat_action(message.chat.id, "typing")
 
     # Запрос к ИИ
-    ai_answer = "Тестовый ответ. Бот работает!"
+    ai_answer = await ask_ai(conversations[user_id])
 
     # Сохраняем ответ ассистента
     conversations[user_id].append({"role": "assistant", "content": ai_answer})

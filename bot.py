@@ -42,7 +42,7 @@ conversations = {}
 async def ask_ai(messages: list) -> str:
     try:
         response = ai_client.chat.completions.create(
-            model="llama-3.1-70b-versatile",  # рабочая бесплатная модель
+            model="llama-3.3-70b-versatile",  # рабочая бесплатная модель
             # Если эта модель перестанет работать, замени на одну из:
             # "llama-3.3-70b-versatile"
             # "llama3-70b-8192"
